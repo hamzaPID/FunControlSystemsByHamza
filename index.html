@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>AI & IoT Lab – PID Drone Playground</title>
+  <title>FunControlSystemsByHamza – PID Playground</title>
   <style>
     body {
       margin: 0;
@@ -22,22 +22,27 @@
     }
     #controls h1 {
       font-size: 18px;
-      margin: 0 0 8px;
+      margin: 0 0 6px;
+    }
+    #controls h2 {
+      font-size: 14px;
+      margin: 0 0 10px;
+      color: #666;
     }
     #controls p {
       font-size: 13px;
       margin: 4px 0;
     }
-    .scenario {
-      margin-top: 10px;
+    .scenario-box {
+      margin-top: 6px;
       padding: 8px;
       border-radius: 6px;
       background: #f0f4ff;
       font-size: 13px;
     }
     button {
-      padding: 8px 10px;
-      margin: 6px 0;
+      padding: 6px 8px;
+      margin: 5px 0;
       width: 100%;
       border-radius: 6px;
       border: 1px solid #888;
@@ -47,6 +52,11 @@
     }
     button:hover {
       background: #e8f0ff;
+    }
+    .scenario-btn.active {
+      background: #2a7ae2;
+      color: #fff;
+      border-color: #2a7ae2;
     }
     .slider-group {
       margin-top: 8px;
@@ -88,14 +98,21 @@
 <body>
   <div id="container">
     <div id="controls">
-      <h1>PID Drone Altitude</h1>
-      <p>AI & IoT Lab – NUST CEME</p>
-      <div class="scenario">
-        <strong>Scenario:</strong> Drone altitude control<br />
-        The drone should reach and hold a target height (1 m).
+      <h1>FunControlSystemsByHamza</h1>
+      <h2>PID Visual Playground</h2>
+
+      <div class="scenario-box">
+        <strong id="scenarioTitle">Drone altitude control</strong><br />
+        <span id="scenarioDesc">
+          The drone should reach and hold a target height of 1 m.
+        </span>
       </div>
 
-      <button id="playBtn">▶ Play / Re-run Animation</button>
+      <button id="btnDrone" class="scenario-btn active">🛸 Drone Altitude</button>
+      <button id="btnServo" class="scenario-btn">⚙️ Servo Position</button>
+      <button id="btnLine" class="scenario-btn">🤖 Line-Follower Robot</button>
+
+      <button id="playBtn" style="margin-top:8px;">▶ Play / Re-run Animation</button>
 
       <div class="slider-group">
         <label for="kp">K<sub>p</sub> (Proportional): <span id="kpVal"></span></label>
@@ -111,9 +128,9 @@
       </div>
 
       <p id="infoText">
-        Try increasing K<sub>p</sub> (faster but more overshoot),<br />
-        K<sub>i</sub> (removes steady-state error), and<br />
-        K<sub>d</sub> (adds damping, reduces overshoot).
+        Increase K<sub>p</sub> → faster but more overshoot.<br />
+        Increase K<sub>i</sub> → removes steady-state error.<br />
+        Increase K<sub>d</sub> → adds damping, reduces overshoot.
       </p>
     </div>
 
@@ -124,12 +141,26 @@
   </div>
 
   <script>
-    // ======== Global elements ========
+    // ================== Canvas setup ==================
     const animCanvas = document.getElementById("animCanvas");
     const plotCanvas = document.getElementById("plotCanvas");
     const animCtx = animCanvas.getContext("2d");
     const plotCtx = plotCanvas.getContext("2d");
 
+    function resizeCanvases() {
+      const visuals = document.getElementById("visuals");
+      animCanvas.width = visuals.clientWidth - 16;
+      animCanvas.height = Math.floor((visuals.clientHeight - 16) / 2);
+      plotCanvas.width = visuals.clientWidth - 16;
+      plotCanvas.height = Math.floor((visuals.clientHeight - 16) / 2);
+    }
+    window.addEventListener("resize", () => {
+      resizeCanvases();
+      if (currentSim) drawFrame(currentSim, currentIndex);
+    });
+    resizeCanvases();
+
+    // ================== UI elements ==================
     const kpSlider = document.getElementById("kp");
     const kiSlider = document.getElementById("ki");
     const kdSlider = document.getElementById("kd");
@@ -138,70 +169,155 @@
     const kdVal = document.getElementById("kdVal");
     const playBtn = document.getElementById("playBtn");
 
-    // Canvas initial size
-    function resizeCanvases() {
-      const visuals = document.getElementById("visuals");
-      // Make them responsive
-      animCanvas.width = visuals.clientWidth - 16;
-      animCanvas.height = Math.floor((visuals.clientHeight - 16) / 2);
-      plotCanvas.width = visuals.clientWidth - 16;
-      plotCanvas.height = Math.floor((visuals.clientHeight - 16) / 2);
-    }
-    window.addEventListener("resize", () => {
-      resizeCanvases();
-      // Redraw last simulation, if any
-      if (currentSim) {
-        drawFrame(currentSim, currentIndex);
+    const btnDrone = document.getElementById("btnDrone");
+    const btnServo = document.getElementById("btnServo");
+    const btnLine  = document.getElementById("btnLine");
+
+    const scenarioTitle = document.getElementById("scenarioTitle");
+    const scenarioDesc  = document.getElementById("scenarioDesc");
+    const infoText      = document.getElementById("infoText");
+
+    // Scenario state
+    let currentMode = "drone"; // 'drone' | 'servo' | 'line'
+
+    const defaults = {
+      drone: {Kp: 18, Ki: 5,  Kd: 4},
+      servo: {Kp: 35, Ki: 8,  Kd: 1},
+      line:  {Kp: 12, Ki: 3,  Kd: 2}
+    };
+
+    function updateScenarioText() {
+      if (currentMode === "drone") {
+        scenarioTitle.textContent = "Drone altitude control";
+        scenarioDesc.textContent  = "Quadcopter moves up/down to reach 1 m altitude.";
+        infoText.innerHTML =
+          "Kp: reaction to height error.<br>" +
+          "Ki: removes steady-state offset (too low/high).<br>" +
+          "Kd: damps oscillations.";
+      } else if (currentMode === "servo") {
+        scenarioTitle.textContent = "Servo position control";
+        scenarioDesc.textContent  = "Servo should rotate to 45° and hold that angle.";
+        infoText.innerHTML =
+          "Kp: how hard the servo turns towards the target.<br>" +
+          "Ki: removes small angle error over time.<br>" +
+          "Kd: smooths motion, reduces overshoot.";
+      } else {
+        scenarioTitle.textContent = "Line-following robot (lateral)";
+        scenarioDesc.textContent  = "Robot should keep y = 0 (stay on the center line).";
+        infoText.innerHTML =
+          "Kp: how aggressively robot steers back to the line.<br>" +
+          "Ki: removes constant bias (sensor misalignment).<br>" +
+          "Kd: anticipates error change, reduces zig-zag.";
       }
-    });
-    resizeCanvases();
+    }
 
-    // ======== Simulation logic (drone altitude PID) ========
+    function setDefaultsForMode(mode) {
+      const d = defaults[mode];
+      kpSlider.value = d.Kp;
+      kiSlider.value = d.Ki;
+      kdSlider.value = d.Kd;
+      updateSliderLabels();
+    }
+
+    // ================== PID simulations ==================
     function simulateDrone(Kp, Ki, Kd) {
-      const T = 10;       // total simulation time [s]
-      const dt = 0.02;    // time step
-      const steps = Math.floor(T / dt) + 1;
-
+      const T = 8, dt = 0.02;
+      const steps = Math.floor(T/dt) + 1;
       const t = new Array(steps);
       const y = new Array(steps);
 
-      // Plant: m*z'' + c*z' + k*z = u
-      const m = 1.0;
-      const c = 1.2;
-      const k = 0.5;
-      const r = 1.0;   // target altitude (m)
+      const m = 1.0, c = 1.2, k = 0.5;
+      const r = 1.0;
 
-      let z = 0;       // position
-      let zdot = 0;    // velocity
-      let eInt = 0;
-      let ePrev = 0;
+      let z = 0, zdot = 0;
+      let eInt = 0, ePrev = 0;
 
       for (let i = 0; i < steps; i++) {
         const ti = i * dt;
         t[i] = ti;
-
         const e = r - z;
-        const de = (i === 0) ? 0 : (e - ePrev) / dt;
+        const de = (i === 0) ? 0 : (e - ePrev)/dt;
         eInt += e * dt;
-        let u = Kp * e + Ki * eInt + Kd * de;
-
-        // Saturation
+        let u = Kp*e + Ki*eInt + Kd*de;
         if (u > 50) u = 50;
         if (u < -50) u = -50;
 
-        // Dynamics (forward Euler)
-        const zddot = (u - c * zdot - k * z) / m;
+        const zddot = (u - c*zdot - k*z)/m;
         z += dt * zdot;
         zdot += dt * zddot;
 
         y[i] = z;
         ePrev = e;
       }
-
-      return { t, y, r };
+      return {t, y, r};
     }
 
-    // ======== Animation state ========
+    function simulateServo(Kp, Ki, Kd) {
+      const T = 4, dt = 0.01;
+      const steps = Math.floor(T/dt) + 1;
+      const t = new Array(steps);
+      const y = new Array(steps);
+
+      const m = 0.02, c = 0.15, k = 0.5;
+      const r = Math.PI/4;  // 45 deg
+
+      let theta = 0, omega = 0;
+      let eInt = 0, ePrev = 0;
+
+      for (let i = 0; i < steps; i++) {
+        const ti = i * dt;
+        t[i] = ti;
+        const e = r - theta;
+        const de = (i === 0) ? 0 : (e - ePrev)/dt;
+        eInt += e * dt;
+        let u = Kp*e + Ki*eInt + Kd*de;
+        if (u > 50) u = 50;
+        if (u < -50) u = -50;
+
+        const alpha = (u - c*omega - k*theta)/m;
+        theta += dt * omega;
+        omega += dt * alpha;
+
+        y[i] = theta;
+        ePrev = e;
+      }
+      return {t, y, r};
+    }
+
+    function simulateLineFollower(Kp, Ki, Kd) {
+      const T = 8, dt = 0.02;
+      const steps = Math.floor(T/dt) + 1;
+      const t = new Array(steps);
+      const y = new Array(steps);
+
+      const m = 1.0, c = 1.0, k = 0.2;
+      const r = 0.0;
+
+      let pos = 0.3;   // lateral offset
+      let vel = 0.0;
+      let eInt = 0, ePrev = 0;
+
+      for (let i = 0; i < steps; i++) {
+        const ti = i * dt;
+        t[i] = ti;
+        const e = r - pos;
+        const de = (i === 0) ? 0 : (e - ePrev)/dt;
+        eInt += e * dt;
+        let u = Kp*e + Ki*eInt + Kd*de;
+        if (u > 50) u = 50;
+        if (u < -50) u = -50;
+
+        const acc = (u - c*vel - k*pos)/m;
+        pos += dt * vel;
+        vel += dt * acc;
+
+        y[i] = pos;
+        ePrev = e;
+      }
+      return {t, y, r};
+    }
+
+    // ================== Animation state ==================
     let currentSim = null;
     let currentIndex = 0;
     let animRequestId = null;
@@ -209,168 +325,253 @@
     function startAnimation(simData) {
       currentSim = simData;
       currentIndex = 0;
-      if (animRequestId !== null) {
-        cancelAnimationFrame(animRequestId);
-      }
+      if (animRequestId !== null) cancelAnimationFrame(animRequestId);
       animate();
     }
 
     function animate() {
       if (!currentSim) return;
-
       drawFrame(currentSim, currentIndex);
-
       currentIndex++;
       if (currentIndex < currentSim.t.length) {
         animRequestId = requestAnimationFrame(animate);
       }
     }
 
-    // ======== Drawing ========
+    // ================== Drawing for each mode ==================
     function drawFrame(simData, idx) {
-      const { t, y, r } = simData;
+      if (currentMode === "drone") {
+        drawDroneFrame(simData, idx);
+      } else if (currentMode === "servo") {
+        drawServoFrame(simData, idx);
+      } else {
+        drawLineFrame(simData, idx);
+      }
+    }
+
+    // ---- Drone ----
+    function drawDroneFrame(simData, idx) {
+      const {t, y, r} = simData;
       const n = t.length;
-      const k = Math.min(idx, n - 1);
-
-      // Compute scales
+      const k = Math.min(idx, n-1);
       const yMin = Math.min(0, ...y);
-      const yMax = Math.max(r * 1.2, ...y, 0.1);
+      const yMax = Math.max(r*1.2, ...y, 0.1);
 
-      // ---- Draw animation (drone) ----
       const ctxA = animCtx;
       const W = animCanvas.width;
       const H = animCanvas.height;
       ctxA.clearRect(0, 0, W, H);
 
-      // Ground
-      const groundY = H * 0.85;
+      const groundY = H*0.85;
       ctxA.strokeStyle = "#333";
       ctxA.lineWidth = 3;
       ctxA.beginPath();
-      ctxA.moveTo(W * 0.05, groundY);
-      ctxA.lineTo(W * 0.95, groundY);
+      ctxA.moveTo(W*0.05, groundY);
+      ctxA.lineTo(W*0.95, groundY);
       ctxA.stroke();
-
       ctxA.fillStyle = "#555";
       ctxA.font = "12px sans-serif";
-      ctxA.fillText("Ground", W * 0.06, groundY - 6);
+      ctxA.fillText("Ground", W*0.06, groundY-6);
 
-      // Target altitude line
-      const targetY =
-        groundY - (r - yMin) / (yMax - yMin) * (H * 0.6);
+      const targetY = groundY - (r - yMin)/(yMax - yMin)*(H*0.6);
       ctxA.strokeStyle = "#999";
-      ctxA.setLineDash([5, 5]);
+      ctxA.setLineDash([5,5]);
       ctxA.beginPath();
-      ctxA.moveTo(W * 0.15, targetY);
-      ctxA.lineTo(W * 0.85, targetY);
+      ctxA.moveTo(W*0.15, targetY);
+      ctxA.lineTo(W*0.85, targetY);
       ctxA.stroke();
       ctxA.setLineDash([]);
       ctxA.fillStyle = "#666";
-      ctxA.fillText("Target altitude", W * 0.16, targetY - 6);
+      ctxA.fillText("Target altitude", W*0.16, targetY-6);
 
-      // Current drone altitude
       const z = y[k];
-      const droneY =
-        groundY - (z - yMin) / (yMax - yMin) * (H * 0.6);
-      const droneX = W * 0.5;
-      const droneW = 60;
-      const droneH = 25;
+      const droneY = groundY - (z - yMin)/(yMax - yMin)*(H*0.6);
+      const droneX = W*0.5, droneW = 60, droneH = 25;
 
       ctxA.fillStyle = "#4da6ff";
       ctxA.strokeStyle = "#222";
       ctxA.lineWidth = 2;
       ctxA.beginPath();
-      ctxA.roundRect(droneX - droneW / 2, droneY - droneH / 2, droneW, droneH, 6);
+      ctxA.roundRect(droneX-droneW/2, droneY-droneH/2, droneW, droneH, 6);
+      ctxA.fill(); ctxA.stroke();
+
+      ctxA.lineWidth = 3;
+      ctxA.beginPath();
+      ctxA.moveTo(droneX-droneW/2, droneY-droneH/2);
+      ctxA.lineTo(droneX-droneW/2-10, droneY-droneH/2-12);
+      ctxA.moveTo(droneX+droneW/2, droneY-droneH/2);
+      ctxA.lineTo(droneX+droneW/2+10, droneY-droneH/2-12);
+      ctxA.stroke();
+
+      ctxA.fillStyle = "#000";
+      ctxA.font = "12px sans-serif";
+      ctxA.fillText(`t = ${t[k].toFixed(2)} s`, W*0.72, H*0.16);
+
+      drawTimePlot({t, y, r, yMin, yMax, label:"Altitude (m)"}, k);
+    }
+
+    // ---- Servo ----
+    function drawServoFrame(simData, idx) {
+      const {t, y, r} = simData;
+      const n = t.length;
+      const k = Math.min(idx, n-1);
+      const theta = y[k];
+
+      const yMin = Math.min(0, ...y, r-0.1);
+      const yMax = Math.max(r*1.2, ...y, 0.1);
+
+      const ctxA = animCtx;
+      const W = animCanvas.width;
+      const H = animCanvas.height;
+      ctxA.clearRect(0, 0, W, H);
+
+      const cx = W*0.5, cy = H*0.55, R = Math.min(W,H)*0.25;
+      ctxA.strokeStyle = "#333";
+      ctxA.lineWidth = 2;
+      ctxA.beginPath();
+      ctxA.arc(cx, cy, R, 0, 2*Math.PI);
+      ctxA.stroke();
+      ctxA.fillStyle = "#000";
+      ctxA.font = "14px sans-serif";
+      ctxA.fillText("Servo", cx-20, cy-R-10);
+
+      // Reference pointer
+      ctxA.strokeStyle = "#999";
+      ctxA.lineWidth = 2;
+      ctxA.beginPath();
+      ctxA.moveTo(cx, cy);
+      ctxA.lineTo(cx + R*Math.cos(r), cy - R*Math.sin(r));
+      ctxA.stroke();
+      ctxA.fillStyle = "#666";
+      ctxA.font = "12px sans-serif";
+      ctxA.fillText("Target angle", cx+R*0.4, cy-R*0.4);
+
+      // Actual pointer
+      ctxA.strokeStyle = "#2a7ae2";
+      ctxA.lineWidth = 4;
+      ctxA.beginPath();
+      ctxA.moveTo(cx, cy);
+      ctxA.lineTo(cx + R*Math.cos(theta), cy - R*Math.sin(theta));
+      ctxA.stroke();
+
+      ctxA.fillStyle = "#000";
+      ctxA.font = "12px sans-serif";
+      ctxA.fillText(`θ = ${(theta*180/Math.PI).toFixed(1)}°`, cx-35, cy+R+16);
+      ctxA.fillText(`t = ${t[k].toFixed(2)} s`, cx+R*0.5, cy+R+16);
+
+      drawTimePlot({t, y, r, yMin, yMax, label:"Angle (rad)"}, k);
+    }
+
+    // ---- Line follower ----
+    function drawLineFrame(simData, idx) {
+      const {t, y, r} = simData;
+      const n = t.length;
+      const k = Math.min(idx, n-1);
+
+      const yMin = Math.min(...y, -0.5);
+      const yMax = Math.max(...y, 0.5);
+
+      const ctxA = animCtx;
+      const W = animCanvas.width;
+      const H = animCanvas.height;
+      ctxA.clearRect(0, 0, W, H);
+
+      const lineY = H*0.5;
+      ctxA.strokeStyle = "#000";
+      ctxA.lineWidth = 3;
+      ctxA.beginPath();
+      ctxA.moveTo(W*0.1, lineY);
+      ctxA.lineTo(W*0.9, lineY);
+      ctxA.stroke();
+      ctxA.fillStyle = "#555";
+      ctxA.font = "12px sans-serif";
+      ctxA.fillText("Ideal path (y = 0)", W*0.12, lineY-8);
+
+      const xProgress = W*0.1 + (W*0.8)*(k/(n-1));
+      const yVal = y[k];
+      const yVis = lineY - (yVal - 0)/(0.5)*(H*0.3); // scale
+
+      const radius = 15;
+      ctxA.fillStyle = "#3aaa35";
+      ctxA.strokeStyle = "#222";
+      ctxA.lineWidth = 2;
+      ctxA.beginPath();
+      ctxA.arc(xProgress, yVis, radius, 0, 2*Math.PI);
       ctxA.fill();
       ctxA.stroke();
 
-      // Rotors
-      ctxA.lineWidth = 3;
-      ctxA.beginPath();
-      ctxA.moveTo(droneX - droneW / 2, droneY - droneH / 2);
-      ctxA.lineTo(droneX - droneW / 2 - 10, droneY - droneH / 2 - 12);
-      ctxA.moveTo(droneX + droneW / 2, droneY - droneH / 2);
-      ctxA.lineTo(droneX + droneW / 2 + 10, droneY - droneH / 2 - 12);
-      ctxA.stroke();
-
-      // Time label
       ctxA.fillStyle = "#000";
       ctxA.font = "12px sans-serif";
-      ctxA.fillText(`t = ${t[k].toFixed(2)} s`, W * 0.7, H * 0.15);
+      ctxA.fillText(`y = ${yVal.toFixed(2)} m`, xProgress-30, yVis-radius-8);
+      ctxA.fillText(`t = ${t[k].toFixed(2)} s`, W*0.72, H*0.18);
 
-      // ---- Draw altitude vs time plot ----
+      drawTimePlot({t, y, r, yMin, yMax, label:"Lateral position y (m)"}, k);
+    }
+
+    // ---- Generic time plot ----
+    function drawTimePlot(cfg, k) {
+      const {t, y, r, yMin, yMax, label} = cfg;
+      const n = t.length;
+
       const ctxP = plotCtx;
       const Wp = plotCanvas.width;
       const Hp = plotCanvas.height;
       ctxP.clearRect(0, 0, Wp, Hp);
 
-      // Axes
       ctxP.strokeStyle = "#444";
       ctxP.lineWidth = 1;
       ctxP.beginPath();
       ctxP.moveTo(40, 10);
-      ctxP.lineTo(40, Hp - 30);      // y-axis
-      ctxP.lineTo(Wp - 10, Hp - 30); // x-axis
+      ctxP.lineTo(40, Hp-30);
+      ctxP.lineTo(Wp-10, Hp-30);
       ctxP.stroke();
 
       ctxP.fillStyle = "#000";
       ctxP.font = "12px sans-serif";
-      ctxP.fillText("Altitude (m)", 6, 16);
-      ctxP.fillText("Time (s)", Wp - 60, Hp - 10);
+      ctxP.fillText(label, 6, 16);
+      ctxP.fillText("Time (s)", Wp-60, Hp-10);
 
-      // Reference line
+      // Reference
       ctxP.strokeStyle = "#999";
-      ctxP.setLineDash([4, 4]);
+      ctxP.setLineDash([4,4]);
       ctxP.beginPath();
-      for (let i = 0; i < n; i++) {
-        const x = 40 + (t[i] / t[n - 1]) * (Wp - 60);
-        const yPlot =
-          (Hp - 30) -
-          (r - yMin) / (yMax - yMin) * (Hp - 60);
-        if (i === 0) ctxP.moveTo(x, yPlot);
-        else ctxP.lineTo(x, yPlot);
+      for (let i=0; i<n; i++) {
+        const x = 40 + (t[i]/t[n-1])*(Wp-60);
+        const yPlot = (Hp-30) - (r - yMin)/(yMax - yMin)*(Hp-60);
+        if (i===0) ctxP.moveTo(x,yPlot); else ctxP.lineTo(x,yPlot);
       }
       ctxP.stroke();
       ctxP.setLineDash([]);
 
-      // Output curve up to current index
+      // Output
       ctxP.strokeStyle = "#2a7ae2";
       ctxP.lineWidth = 2;
       ctxP.beginPath();
-      for (let i = 0; i <= k; i++) {
-        const x = 40 + (t[i] / t[n - 1]) * (Wp - 60);
-        const yPlot =
-          (Hp - 30) -
-          (y[i] - yMin) / (yMax - yMin) * (Hp - 60);
-        if (i === 0) ctxP.moveTo(x, yPlot);
-        else ctxP.lineTo(x, yPlot);
+      for (let i=0; i<=k; i++) {
+        const x = 40 + (t[i]/t[n-1])*(Wp-60);
+        const yPlot = (Hp-30) - (y[i] - yMin)/(yMax - yMin)*(Hp-60);
+        if (i===0) ctxP.moveTo(x,yPlot); else ctxP.lineTo(x,yPlot);
       }
       ctxP.stroke();
 
-      // Legend
       ctxP.fillStyle = "#000";
       ctxP.font = "11px sans-serif";
-      ctxP.fillText("Reference", 50, 20);
-      ctxP.fillText("Altitude", 50, 34);
+      ctxP.fillText("Reference", 52, 20);
+      ctxP.fillText("Output", 52, 34);
       ctxP.strokeStyle = "#999";
       ctxP.beginPath();
-      ctxP.moveTo(120, 16);
-      ctxP.lineTo(150, 16);
-      ctxP.stroke();
+      ctxP.moveTo(120,16); ctxP.lineTo(150,16); ctxP.stroke();
       ctxP.strokeStyle = "#2a7ae2";
       ctxP.beginPath();
-      ctxP.moveTo(120, 30);
-      ctxP.lineTo(150, 30);
-      ctxP.stroke();
+      ctxP.moveTo(120,30); ctxP.lineTo(150,30); ctxP.stroke();
     }
 
-    // ======== UI wiring ========
+    // ================== UI wiring ==================
     function updateSliderLabels() {
       kpVal.textContent = parseFloat(kpSlider.value).toFixed(1);
       kiVal.textContent = parseFloat(kiSlider.value).toFixed(1);
       kdVal.textContent = parseFloat(kdSlider.value).toFixed(1);
     }
-
     kpSlider.addEventListener("input", updateSliderLabels);
     kiSlider.addEventListener("input", updateSliderLabels);
     kdSlider.addEventListener("input", updateSliderLabels);
@@ -379,12 +580,62 @@
       const Kp = parseFloat(kpSlider.value);
       const Ki = parseFloat(kiSlider.value);
       const Kd = parseFloat(kdSlider.value);
-      const sim = simulateDrone(Kp, Ki, Kd);
+      let sim;
+      if (currentMode === "drone") sim = simulateDrone(Kp,Ki,Kd);
+      else if (currentMode === "servo") sim = simulateServo(Kp,Ki,Kd);
+      else sim = simulateLineFollower(Kp,Ki,Kd);
       startAnimation(sim);
     });
 
-    // Initialize labels and first run
+    function setActiveButton() {
+      [btnDrone, btnServo, btnLine].forEach(b => b.classList.remove("active"));
+      if (currentMode === "drone") btnDrone.classList.add("active");
+      else if (currentMode === "servo") btnServo.classList.add("active");
+      else btnLine.classList.add("active");
+    }
+
+    btnDrone.addEventListener("click", () => {
+      currentMode = "drone";
+      setActiveButton();
+      setDefaultsForMode("drone");
+      updateScenarioText();
+      const sim = simulateDrone(
+        parseFloat(kpSlider.value),
+        parseFloat(kiSlider.value),
+        parseFloat(kdSlider.value)
+      );
+      startAnimation(sim);
+    });
+
+    btnServo.addEventListener("click", () => {
+      currentMode = "servo";
+      setActiveButton();
+      setDefaultsForMode("servo");
+      updateScenarioText();
+      const sim = simulateServo(
+        parseFloat(kpSlider.value),
+        parseFloat(kiSlider.value),
+        parseFloat(kdSlider.value)
+      );
+      startAnimation(sim);
+    });
+
+    btnLine.addEventListener("click", () => {
+      currentMode = "line";
+      setActiveButton();
+      setDefaultsForMode("line");
+      updateScenarioText();
+      const sim = simulateLineFollower(
+        parseFloat(kpSlider.value),
+        parseFloat(kiSlider.value),
+        parseFloat(kdSlider.value)
+      );
+      startAnimation(sim);
+    });
+
+    // Initialize
     updateSliderLabels();
+    updateScenarioText();
     const initialSim = simulateDrone(
       parseFloat(kpSlider.value),
       parseFloat(kiSlider.value),
